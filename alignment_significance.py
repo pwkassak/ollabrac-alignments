@@ -1,132 +1,78 @@
 #!/usr/local/bin/python3
-import pandas as pd
-import numpy as np
-import bisect
-from bokeh.plotting import figure, output_file, show
-from bokeh.models import Range1d
+from geometry import AlignmentTarget
+from computer import Computer, compute_all_azimuths
+from grapher import LocationGrapher, CircleGrapher, SignificanceGrapher
+from reader import DataReader
 
-class Simulator:
-	def __init__(self, n_markers, target_azimuths, tolerance):
-		if n_markers > 50:
-			raise '''number of markers cannot exceed 50, 
-					 otherwise there are too many alignments 
-					 to check'''
+# Define constants, including the alignment targets.
+DATA_FILE = './resources/Marcahuasi_markers.csv'
+TOLERANCES = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5]
+NUMBER_SIMULATED = 100
+NUMBER_EXAMPLES = 1
+ALIGNMENT_TARGETS = [AlignmentTarget("Equinox", "rise", 90),
+                     AlignmentTarget("Equinox", "set", 270),
+                     AlignmentTarget("Solstice", "Jun 21 rise", 66),
+                     AlignmentTarget("Solstice", "Jun 21 set", 292),
+                     AlignmentTarget("Solstice", "Dec 21 rise", 112),
+                     AlignmentTarget("Solstice", "Dec 21 set", 246),
+                     AlignmentTarget("Zenith Passage", "rise", 100.5),
+                     AlignmentTarget("Zenith Passage", "set", 257.5),
+                     AlignmentTarget("Pleiades Last Appearance", "Pleiades on horizon", 290.8)]
 
-		self.n_markers = n_markers # number of markers
-		self.target_azimuths = target_azimuths
-		self.tolerance = tolerance
-		self.matches_list = []
-	
-	# sample n random markers within a radius of 1.0
-	def random_markers(self):
-		r2 = np.random.uniform(0, 1, size=self.n_markers)
-		angle = np.pi * np.random.uniform(0, 2, size=self.n_markers)
-		r = np.apply_along_axis(np.sqrt, 0, r2)
-		cos = np.apply_along_axis(np.cos, 0, angle)
-		sin = np.apply_along_axis(np.sin, 0, angle)
-		x = np.multiply(r, cos)
-		y = np.multiply(r, sin)
-		return (x, y)
-
-	def alignments(self, markers):
-		alignments = []
-		for i in range(self.n_markers):
-			x1 = markers[0][i]
-			y1 = markers[1][i]
-			for j in range(i + 1, self.n_markers):
-				x2 = markers[0][j]
-				y2 = markers[1][j]
-				azimuth1 = (180.0 / np.pi) * (np.arctan2( y2 - y1, x2 - x1 ) + np.pi)
-				azimuth2 = (180.0 + azimuth1) % 360.0
-				alignments.append(azimuth1)
-				alignments.append(azimuth2)
-
-		return alignments
-
-	def count_matches(self, alignments):
-		matches = 0
-		for i in range(len(alignments)):
-			alignment = alignments[i]
-			for j in range(len(self.target_azimuths)):
-				target = self.target_azimuths[j]
-				if np.abs(target - alignment) < self.tolerance:
-					matches += 1
-		return matches
-
-
-	def simulate(self, n_simulated):
-		for i in range(n_simulated):
-			markers = self.random_markers()
-			alignments = self.alignments(markers)
-			matches = self.count_matches(alignments)
-			self.matches_list.append(matches)
-			if (i+1) % 1000 == 0:
-				print(f'iteration {i+1} / {n_simulated}')
-		self.matches_list.sort()
-
-	def plot_density(self):
-		p = figure(title=f'density of alignments for {self.n_markers} randomly chosen markers within a radius. Angle tolerance {self.tolerance} deg',
-					sizing_mode='stretch_both'
-					)
-
-		max_val = self.matches_list[-1]
-		bins = [i - 0.5 for i in range(0, max_val+1, 1)]
-		hist, edges = np.histogram(self.matches_list, density=True, bins=bins)
-		p.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:],
-           fill_color="navy", line_color="white", alpha=0.5)
-		p.xaxis.axis_label = 'alignments'
-		p.yaxis.axis_label = 'Pr(alignments | random markers)'
-		ticks = [i for i in range(self.matches_list[-1])]
-		p.xaxis.ticker = ticks
-		p.x_range=Range1d(-0.5, self.matches_list[-1])
-		show(p)
-
-	def report_significance(self, matches):
-		
-		i_left = bisect.bisect_left(self.matches_list, matches)
-		i_right = bisect.bisect_right(self.matches_list, matches)
-		v = 0.5 * (float(i_left) + float(i_right))
-		significance = 1 - v / len(self.matches_list)
-		print(f'p-value for {matches} alignments on {self.n_markers} markers is {significance:.5f} (angle tolerance {self.tolerance} deg)')
-		return significance
-
-	def graph_significance(self):
-		p = figure(title=f'p-values for number of alignments for {self.n_markers} markers, angle tolerance: {self.tolerance} deg',
-			       sizing_mode='stretch_both')
-		p.xaxis.axis_label = 'observed'
-		p.yaxis.axis_label = 'Pr(alignments > observed | random markers)'
-		n = len(self.matches_list) + 1
-		y = [float(i)/n for i in range(n, 0, -1)]
-		p.line(x=([0] + self.matches_list), y=y)
-		p.line(x=[0, self.matches_list[-1]], 
-			   y=[0.05, 0.05], 
-			   color='black', 
-			   line_width=2)
-		ticks = [i for i in range(self.matches_list[-1])]
-		p.xaxis.ticker = ticks
-		p.x_range=Range1d(-0.5, self.matches_list[-1])
-		show(p)
 
 def main():
-	n_markers = 7
-	target_azimuths = [66,    # June solstice sunrise,
-					   90,    # equinox sunrise (both of them, in March and September)
-					   100.5, # zenith passage (sun direct overhead at noon) sunrise (both of them, in February and October)
-					   112,   # December solstice sunrise
-					   246,   # December solstice sunset
-					   257.5, # zenith passage (sun direct overhead at noon) sunset (both of them, in Feb and Oct)
-					   270,   # equinox sunset (both of them, in March and Sept)
-					   292]   # June solstice sunset
-	simulator = Simulator(n_markers=n_markers, 
-		                  target_azimuths=target_azimuths,
-		                  tolerance=2.5)
-	simulator.simulate(n_simulated=50000)
-	simulator.plot_density()
-	simulator.graph_significance()
-	simulator.report_significance(matches=11)
+
+  # Read and create Markers from the data file.
+  data_reader = DataReader(DATA_FILE)
+  data_reader.read_marker_locations()
+
+  # Create diagram using all pairs and targets.
+  all_pairs = compute_all_azimuths(data_reader.markers)
+  circle_grapher = CircleGrapher(all_pairs, ALIGNMENT_TARGETS)
+  circle_grapher.graph()
+  circle_grapher.show()
+
+  # Loop through each tolerance and compare the observed
+  # number of alignments with the number that match when
+  # the markers are simulated randomly.
+  for tolerance in TOLERANCES:
+    computer = Computer(markers=data_reader.markers,
+                        alignment_targets=ALIGNMENT_TARGETS,
+                        tolerance=tolerance)
+
+    # Graph the locations of the markers on a map.
+    grapher = LocationGrapher(computer.markers, tolerance)
+    grapher.graph()
+
+    # Determine how many alignments there are and graph
+    # them on the map, color-coding the type of alignment.
+    observed_alignments = computer.determine_alignments(computer.markers)
+    grapher.plot_alignments(observed_alignments)
+    grapher.show()
+
+    # Simulate the same number of random markers in the same region
+    # num_simulated times, and for each set of simulated markers,
+    # determine the number that match. Return num_examples of simulated
+    # sets of markers only for the purpose of graphing them on a map
+    # for inspection.
+    list_of_simulated_markers = computer.simulate(num_simulated=NUMBER_SIMULATED,
+                                                  num_examples=NUMBER_EXAMPLES)
+    # Plot the returned sets of simulated markers and alignments for
+    # inspection.
+    for simulated_markers in list_of_simulated_markers:
+      grapher = LocationGrapher(simulated_markers, tolerance)
+      grapher.graph()
+      matches = computer.determine_alignments(simulated_markers)
+      grapher.plot_alignments(matches)
+      grapher.show()
+
+    # Plot and report the statistical significance estimates.
+    significance_grapher = SignificanceGrapher(len(data_reader.markers),
+                                               tolerance,
+                                               computer.matches_list)
+    significance_grapher.graph(observed_alignments=len(observed_alignments))
+    computer.report_significance(observed_alignments=len(observed_alignments))
 
 
 if __name__ == "__main__":
-    main()
-
-
+  main()
